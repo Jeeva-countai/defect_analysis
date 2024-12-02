@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Defect Detection Form</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>Defect Detection Form</h1>
+        <form id="defectForm">
+            <!-- Dropdown for selecting mill -->
+            <label for="millDropdown">Select Mill:</label>
+            <select id="millDropdown" name="millDropdown" required>
+                <option value="">--Select a Mill--</option>
+            </select>
+
+            <!-- Dropdown for selecting machine -->
+            <label for="machineDropdown">Select Machine:</label>
+            <select id="machineDropdown" name="machineDropdown" required>
+                <option value="">--Select a Machine--</option>
+            </select>
+
+            <label for="date">Date (YYYY-MM-DD):</label>
+            <input type="date" id="date" name="date" required>
+
+            <label for="saveDir">Save Directory Path:</label>
+            <input type="text" id="saveDir" name="saveDir" placeholder="Enter Save Directory Path" required>
+
+            <label for="defectType">Select Defect Type:</label>
+            <select id="defectType" name="defectType" required>
+                <option value="lycra">Lycra</option>
+                <option value="needln">Needle Line</option>
+                <option value="shutoff">Shut Off</option>
+                <option value="hole">Hole</option>
+                <option value="countmix">Count Mix</option>
+                <option value="stopline">Stop Line</option>
+                <option value="twoply">Two Ply</option>
+                <option value="oil">Oil</option>
+            </select>
+
+            <button type="button" id="submitButton">Submit</button>
+        </form>
+        <div id="response"></div>
+    </div>
+
+    <script>
+        // Fetch mills and populate the mill dropdown
+        async function fetchMills() {
+            try {
+                const response = await fetch('/get_mills');
+                const data = await response.json();
+                const millDropdown = document.getElementById('millDropdown');
+                data.mills.forEach(mill => {
+                    const option = document.createElement('option');
+                    option.value = mill.milldetails_id;
+                    option.textContent = mill.mill_name;
+                    millDropdown.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Error fetching mills:', error);
+            }
+        }
+
+        // Fetch machines based on the selected mill
+        async function fetchMachines() {
+            const millDropdown = document.getElementById('millDropdown');
+            const machineDropdown = document.getElementById('machineDropdown');
+            const millId = millDropdown.value;
+
+            // Clear existing options in the machine dropdown
+            machineDropdown.innerHTML = '<option value="">--Select a Machine--</option>';
+
+            if (millId) {
+                try {
+                    const response = await fetch(`/get_machines/${millId}`);
+                    const data = await response.json();
+                    data.machines.forEach(machine => {
+                        const option = document.createElement('option');
+                        option.value = machine.machinedetail_id;
+                        option.textContent = machine.machine_name;
+                        machineDropdown.appendChild(option);
+                    });
+                } catch (error) {
+                    console.error('Error fetching machines:', error);
+                }
+            }
+        }
+
+        // Handle form submission
+        document.getElementById('submitButton').addEventListener('click', async () => {
+            const millId = document.getElementById('millDropdown').value;
+            const machineId = document.getElementById('machineDropdown').value;
+            const date = document.getElementById('date').value;
+            const saveDir = document.getElementById('saveDir').value;
+            const defectType = document.getElementById('defectType').value;
+
+            if (!millId || !machineId || !date || !saveDir || !defectType) {
+                alert('Please fill all fields!');
+                return;
+            }
+
+            try {
+                const response = await fetch('/submit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        millId,
+                        machineId,
+                        date,
+                        saveDir,
+                        defectType
+                    })
+                });
+
+                const data = await response.json();
+                const responseDiv = document.getElementById('response');
+                responseDiv.textContent = data.message;
+
+                if (response.ok && data.file) {
+                    const downloadLink = document.createElement('a');
+                    downloadLink.href = data.file;
+                    downloadLink.textContent = 'Download Result File';
+                    responseDiv.appendChild(document.createElement('br'));
+                    responseDiv.appendChild(downloadLink);
+                }
+            } catch (error) {
+                console.error('Error submitting form:', error);
+            }
+        });
+
+        // Initialize mills on page load
+        document.addEventListener('DOMContentLoaded', fetchMills);
+
+        // Trigger fetch machines when a mill is selected
+        document.getElementById('millDropdown').addEventListener('change', fetchMachines);
+    </script>
+</body>
+</html>
