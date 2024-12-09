@@ -1,226 +1,195 @@
 import os
 import csv
-import glob
 import shutil
 import subprocess
 import traceback
+import paramiko  # Import paramiko for better SSH/SCP handling
 from flask import Flask, request, jsonify, render_template
 from db import DB
+from datetime import datetime, timedelta
+import pytz
+import time
+import platform
+from flask import send_file, send_from_directory
+
 
 app = Flask(__name__)
-
-# Initialize DB instance
 db = DB()
 
-# Base directory for temporary data
-BASE_DIR = "/home/kniti"
-TEMP_DIR = os.path.join(BASE_DIR, "needln_data")
-ZIP_OUTPUT_DIR = BASE_DIR
 
-def zip_folder(folder_path, output_dir):
-    """Zip the folder and save the zip file in the output directory."""
-    try:
-        folder_name = os.path.basename(os.path.normpath(folder_path))
-        zip_path = os.path.join(output_dir, folder_name)
-        shutil.make_archive(zip_path, 'zip', folder_path)
-        print(f"Folder zipped and saved as: {zip_path}.zip")
-        return f"{zip_path}.zip"
-    except Exception as e:
-        print("Error zipping folder:", str(e))
-        traceback.print_exc()
-        return None
+class SSHManager:
+    def __init__(self, username, password, use_tailscale=False):
+        self.username = username
+        self.password = password
+        self.use_tailscale = use_tailscale  # Flag to use Tailscale authentication
 
+    def run_command(self, hostname, command, max_attempts=10, delay=10):
+        """Execute a command over SSH and capture the output, checking if the machine is online first."""
+        print(f"Initialized SSHManager with username={self.username}, use_tailscale={self.use_tailscale}")
 
-def recreate_folder(path):
-    """Recreate folder: delete it if exists and create a new one."""
-    try:
-        if os.path.exists(path):
-            shutil.rmtree(path)
-        os.makedirs(path, exist_ok=True)
-        print(f"Recreated folder: {path}")
-    except Exception as e:
-        print("Error recreating folder:", str(e))
-        traceback.print_exc()
+        # Check if the machine is online before attempting the SSH connection
+        if not self.is_machine_online(hostname):
+            print(f"Machine {hostname} is offline. Skipping SSH command execution.")
+            return False, None
 
-
-def copy_files(src_dir, dest_dir, imageid):
-    """Copy files based on image id from source to destination."""
-    try:
-        filename = os.path.splitext(imageid)[0]
-        pattern = os.path.join(src_dir, f"{filename}_*.jpg")
-
-        files_to_copy = glob.glob(pattern)
-
-        if not files_to_copy:
-            print(f"No files matched the pattern: {pattern}")
-            return
-
-        for file in files_to_copy:
-            shutil.copy(file, dest_dir)
-            print(f"Copied: {file}")
-    except Exception as e:
-        print(f"Error copying files: {e}")
-        traceback.print_exc()
-
-
-def transfer_files_to_remote(client_ip, zip_file_path):
-    """Transfer the necessary files to the remote server."""
-    try:
-        # Copy the necessary files
-        subprocess.run(f'scp main.py {client_ip}:/home/kniti/', shell=True, check=True)
-        subprocess.run(f'scp db.py {client_ip}:/home/kniti/', shell=True, check=True)
-        subprocess.run(f'scp {zip_file_path} {client_ip}:/home/kniti/needln_data.zip', shell=True, check=True)
-        print("Files transferred successfully.")
-    except subprocess.CalledProcessError as e:
-        print(f"Error transferring files: {e}")
-        traceback.print_exc()
-
-
-def execute_remote_script(client_ip, date, defect_type):
-    """Execute the main.py script on the remote server."""
-    try:
-        # Run the remote script
-        command = f"ssh {client_ip} 'python3 /home/kniti/main.py {date} {defect_type}'"
-        subprocess.run(command, shell=True, check=True)
-        print("Remote script executed successfully.")
-    except subprocess.CalledProcessError as e:
-        print(f"Error executing remote script: {e}")
-        traceback.print_exc()
-
-
-def retrieve_result_file(client_ip, savedir):
-    """Retrieve the result file from the remote server."""
-    try:
-        subprocess.run(f'scp {client_ip}:/home/kniti/needln_data.zip {savedir}', shell=True, check=True)
-        print("Result file retrieved successfully.")
-    except subprocess.CalledProcessError as e:
-        print(f"Error retrieving result file: {e}")
-        traceback.print_exc()
-
-
-def clean_up_remote_server(client_ip):
-    """Clean up temporary files on the remote server."""
-    try:
-        subprocess.run(f'ssh {client_ip} "rm -rf /home/kniti/main.py /home/kniti/db.py /home/kniti/needln_data.zip"', shell=True, check=True)
-        print("Cleaned up remote server.")
-    except subprocess.CalledProcessError as e:
-        print(f"Error cleaning up remote server: {e}")
-        traceback.print_exc()
-
-
-def fetch_data(date, defecttyp_id, client_ip, savedir):
-    """Fetch data, process it, and manage file transfers."""
-    try:
-        recreate_folder(TEMP_DIR)
-
-        roll_id = db.get_data_frame(date)
-        if not roll_id:
-            return "No data found for the given date.", False
-
-        # Existing logic to fetch and process data, generate CSV, etc.
-        for rollid in roll_id:
-            roll = rollid['roll_id']
-            roll_name = rollid['roll_name']
+        for attempt in range(max_attempts):
+            print(f"\n--- Attempt {attempt + 1} of {max_attempts} ---")
             try:
-                needln_data = db.get_needle_line_defects(roll, defecttyp_id)
-                rollid['defect_data'] = needln_data
-                if needln_data:
-                    for data in needln_data:
-                        filepath = os.path.join(BASE_DIR, "projects", "knit-i", "knitting-core", data['file_path'])
-                        savepath = os.path.join(TEMP_DIR, roll_name, str(data['alarm_id']))
-                        os.makedirs(savepath, exist_ok=True)
-                        copy_files(filepath, savepath, data['filename'])
+                # SSH command with options (adjusting for Tailscale or password authentication)
+                if self.use_tailscale:
+                    # Assuming that Tailscale is being used for authentication
+                    ssh_command = f"ssh -o StrictHostKeyChecking=no {self.username}@{hostname} 'echo \"{self.password}\" | sudo -S bash -c \"{command}\"'"
+                    print(f"Using Tailscale-based SSH command: {ssh_command}")
+                else:
+                    # Use standard password-based authentication
+                    ssh_command = f"ssh -o StrictHostKeyChecking=no {self.username}@{hostname} 'echo \"{self.password}\" | sudo -S bash -c \"{command}\"'"
+                    print(f"Using password-based SSH command: {ssh_command}")
+
+                # Execute SSH command using subprocess
+                print(f"Executing SSH command on {hostname}: {command}")
+                result = subprocess.run(ssh_command, shell=True, check=True, capture_output=True, text=True)
+
+                # Print command output
+                print(f"Command output for attempt {attempt + 1}:")
+                print(result.stdout)
+                print(f"Command stderr (if any):")
+                print(result.stderr)
+
+                # If command is successful, return the result
+                if result.returncode == 0:
+                    print(f"Command executed successfully on {hostname}")
+                    return True, result.stdout.strip()  # Return command output
+                else:
+                    print(f"Command failed with return code {result.returncode}")
+                    raise subprocess.CalledProcessError(result.returncode, ssh_command, output=result.stdout, stderr=result.stderr)
+
+            except subprocess.CalledProcessError as e:
+                print(f"Attempt {attempt + 1} failed. Error executing command on {hostname}: {e}")
+                print(f"stderr: {e.stderr}")
+                print(f"stdout: {e.output}")
+                time.sleep(delay)  # Retry delay
             except Exception as e:
-                print(f"Error processing roll_id {roll}: {e}")
-                traceback.print_exc()
-                continue
+                print(f"Unexpected error on attempt {attempt + 1}: {e}")
+                time.sleep(delay)  # Retry delay
 
-        # Prepare CSV data
-        csv_data = []
-        for roll in roll_id:
-            roll_name = roll['roll_name']
-            roll_number = roll['roll_number']
-            for defect in roll.get('defect_data', []):
-                csv_data.append({
-                    'roll_id': roll['roll_id'],
-                    'roll_name': roll_name,
-                    'roll_number': roll_number,
-                    'alarm_id': defect['alarm_id'],
-                    'defect_id': defect['defect_id'],
-                    'timestamp': defect['timestamp'].isoformat(),
-                    'cam_id': defect['cam_id'],
-                    'filename': defect['filename'],
-                    'file_path': defect['file_path'],
-                    'revolution': defect['revolution'],
-                    'angle': defect['angle'],
-                    'coordinate': defect['coordinate'],
-                    'score': defect['score']
-                })
+        print(f"Max attempts reached. Skipping command '{command}' for {hostname}.")
+        return False, None  # Return None if max attempts reached
 
-        # Write to CSV
-        csv_file_path = os.path.join(TEMP_DIR, f"{date}_{defecttyp_id}.csv")
-        headers = [
-            'roll_id', 'roll_name', 'roll_number', 'alarm_id', 'defect_id',
-            'timestamp', 'cam_id', 'filename', 'file_path',
-            'revolution', 'angle', 'coordinate', 'score'
-        ]
+    def is_machine_online(self, ip_address):
+        """Check if the machine is online using a ping command."""
+        import subprocess
+        import platform
 
-        with open(csv_file_path, mode='w', newline='') as file:
-            writer = csv.DictWriter(file, fieldnames=headers)
-            writer.writeheader()
-            writer.writerows(csv_data)
+        param = "-n" if platform.system().lower() == "windows" else "-c"
+        try:
+            result = subprocess.run(
+                ["ping", param, "1", ip_address],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            # If the return code is 0, the ping was successful
+            return result.returncode == 0
+        except Exception as e:
+            print(f"Error while pinging {ip_address}: {e}")
+            return False
+import os
 
-        # Zip the folder
-        zip_file_path = zip_folder(TEMP_DIR, ZIP_OUTPUT_DIR)
+def rename_zip_file(original_file_path, mill_name, machine_name, date, defect_type, save_dir):
+    """
+    Rename the fetched ZIP file to match the format:
+    selectedmillname_selectedmachinename_date_defect.zip
+    """
+    try:
+        # Generate the new file name
+        new_file_name = f"{mill_name}_{machine_name}_{date}_{defect_type}.zip"
+        
+        # Create the new file path
+        new_file_path = os.path.join(save_dir, new_file_name)
 
-        # Transfer necessary files to the remote server
-        transfer_files_to_remote(client_ip, zip_file_path)
-
-        # Execute the script on the remote server
-        execute_remote_script(client_ip, date, defecttyp_id)
-
-        # Retrieve the result file from the remote server
-        retrieve_result_file(client_ip, savedir)
-
-        # Clean up the remote server
-        clean_up_remote_server(client_ip)
-
-        # Clean up local temporary folder
-        if os.path.exists(TEMP_DIR):
-            shutil.rmtree(TEMP_DIR)
-            print(f"Deleted temporary folder: {TEMP_DIR}")
-
-        return zip_file_path, True
+        # Rename the file
+        os.rename(original_file_path, new_file_path)
+        
+        print(f"File renamed successfully to: {new_file_path}")
+        return new_file_path, True
     except Exception as e:
-        print("Error in fetch_data:", str(e))
+        print(f"Error renaming file: {e}")
+        return str(e), False
+
+
+def fetch_data(date, defect_type_id, mill_id, machine_id, save_dir):
+    """Fetch mill and machine details, run remote script, and fetch result."""
+    try:
+        mill_name = db.get_mills()
+        machine_name = db.get_machines_by_mill(mill_id)
+        machine_ip = db.get_machine_ip(mill_id, machine_id)
+        
+        if not all([mill_name, machine_name, machine_ip]):
+            raise Exception(f"Missing details for mill_id={mill_id}, machine_id={machine_id}")
+
+        # Establish SSH connection
+        ssh = SSHManager(username="kniti", password="Charlemagne@1")
+        success, _ = ssh.run_command(machine_ip, "hostname")
+        if not success:
+            raise Exception(f"SSH connection to {machine_ip} failed.")
+        
+        #  Check if client.py exists and remove it if it does
+        print(f"Checking if client.py exists on {machine_ip}...")
+        check_file_command = "test -f /home/kniti/client.py && echo 'File exists' || echo 'File does not exist'"
+        success, output = ssh.run_command(machine_ip, check_file_command)
+        if success and "File exists" in output:
+            print("File exists, removing old client.py...")
+            remove_file_command = "rm -f /home/kniti/client.py"
+            success, _ = ssh.run_command(machine_ip, remove_file_command)
+            if not success:
+                raise Exception("Failed to remove old client.py")
+
+        # Copy the updated client.py to the remote machine
+        print(f"Copying client.py to {machine_ip}...")
+        scp_command = [
+            "scp", "/home/jeeva/defect_analysis/project/app/client.py",
+            f"kniti@{machine_ip}:/home/kniti/client.py"
+        ]
+        result = subprocess.run(scp_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if result.returncode != 0:
+            raise Exception(f"Failed to copy client.py: {result.stderr.decode()}")
+
+
+        # Run the remote script to process data
+        remote_script_command = f"python3 /home/kniti/client.py {date} {defect_type_id} {save_dir}"
+        success, output = ssh.run_command(machine_ip, remote_script_command)
+        if not success:
+            raise Exception(f"Failed to execute client.py: {output}")
+
+        # Fetch the result file
+        zip_filename = f"{date}_{defect_type_id}.zip"
+        remote_file_path = f"/home/kniti/defect_analysis/{zip_filename}"
+        local_file_path = os.path.join(save_dir, zip_filename)
+
+        print(f"Fetching file from {remote_file_path} to {local_file_path}...")
+        
+        # Use subprocess.run with shell=False for better safety and error handling
+        scp_fetch_command = [
+            "scp", f"kniti@{machine_ip}:{remote_file_path}", local_file_path
+        ]
+        fetch_result = subprocess.run(scp_fetch_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        
+        if fetch_result.returncode != 0:
+            raise Exception(f"Failed to fetch ZIP file: {fetch_result.stderr.decode()}")
+        
+        print(f"ZIP file fetched successfully: {local_file_path}")
+        return local_file_path, True
+
+    except Exception as e:
+        print(f"Error in fetch_data: {e}")
         traceback.print_exc()
         return str(e), False
 
 
-@app.route('/')
+@app.route("/")
 def index():
     """Render the index page."""
-    return render_template('index.html')
-
-
-@app.route('/submit', methods=['POST'])
-def submit():
-    """Handle the form submission for processing data."""
-    data = request.json
-    date = data.get('date')
-    defecttyp_id = data.get('defectType')
-    client_ip = data.get('client_ip')  # Assuming this is part of the request data
-    savedir = data.get('saveDir')      # Directory where the result should be saved locally
-
-    if not date or not defecttyp_id or not client_ip or not savedir:
-        return jsonify({"message": "Date, defect type, client IP, and save directory are required!"}), 400
-
-    result, success = fetch_data(date, defecttyp_id, client_ip, savedir)
-
-    if success:
-        return jsonify({"message": "Processing completed successfully!", "file": result}), 200
-    else:
-        return jsonify({"message": "An error occurred during processing.", "error": result}), 500
+    return render_template("index.html")
 
 @app.route('/get_mills', methods=['GET'])
 def get_mills():
@@ -244,6 +213,50 @@ def get_machines(mill_id):
         traceback.print_exc()
         return jsonify({"message": "Failed to fetch machines"}), 500
 
+@app.route("/submit", methods=["POST"])
+def submit():
+    """Handle form submission."""
+    data = request.get_json()
+    date = data.get("date")
+    defect_type = data.get("defectType")
+    mill_id = data.get("millId")
+    machine_id = data.get("machineId")
+    save_dir = data.get("saveDir")
 
-if __name__ == '__main__':
-    app.run(debug=True)  # You can specify the port here
+    if not all([date, defect_type, mill_id, machine_id, save_dir]):
+        return jsonify({"message": "All fields are required!"}), 400
+
+    result_file_path, success = fetch_data(date, defect_type, mill_id, machine_id, save_dir)
+    if success:
+        return jsonify({"message": "Processing completed!", "file": result_file_path}), 200
+    return jsonify({"message": "Processing failed.", "error": result_file_path}), 500
+
+@app.route("/download/<date>/<defect_type_id>", methods=["POST"])
+def download_file(date, defect_type_id):
+    """Serve the file for download."""
+    try:
+        # Define the directory where files are stored
+        save_dir = "/home/kniti/defect_analysis"
+        
+        # Generate the zip filename dynamically based on the date and defect_type_id
+        zip_filename = f"{date}_{defect_type_id}.zip"
+        
+        # Build the full file path
+        file_path = os.path.join(save_dir, zip_filename)
+        
+        # Check if the file exists
+        if os.path.exists(file_path):
+            # Serve the file from the directory
+            return send_from_directory(directory=save_dir, path=zip_filename, as_attachment=True)
+
+        else:
+            return jsonify({"message": "File not found!"}), 404
+    except Exception as e:
+        print("Error in /download route:", e)
+        traceback.print_exc()
+        return jsonify({"message": "Failed to download file."}), 500
+
+
+
+if __name__ == "__main__":
+    app.run(debug=True , port = 4000)
