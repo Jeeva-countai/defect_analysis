@@ -231,32 +231,16 @@ def submit():
         return jsonify({"message": "Processing completed!", "file": result_file_path}), 200
     return jsonify({"message": "Processing failed.", "error": result_file_path}), 500
 
-@app.route("/download/<date>/<defect_type_id>", methods=["POST"])
-def download_file(date, defect_type_id):
-    """Serve the file for download."""
-    try:
-        # Define the directory where files are stored
-        save_dir = "/home/kniti/defect_analysis"
-        
-        # Generate the zip filename dynamically based on the date and defect_type_id
-        zip_filename = f"{date}_{defect_type_id}.zip"
-        
-        # Build the full file path
-        file_path = os.path.join(save_dir, zip_filename)
-        
-        # Check if the file exists
-        if os.path.exists(file_path):
-            # Serve the file from the directory
-            return send_from_directory(directory=save_dir, path=zip_filename, as_attachment=True)
+@app.route('/download/<path:filename>')
+def download_file(filename):
+    directory = '/home/jeeva/defect'  # Adjust to your base directory
+    file_path = os.path.join(directory, filename)
 
-        else:
-            return jsonify({"message": "File not found!"}), 404
-    except Exception as e:
-        print("Error in /download route:", e)
-        traceback.print_exc()
-        return jsonify({"message": "Failed to download file."}), 500
-
+    if os.path.exists(file_path):
+        return send_from_directory(directory, filename, as_attachment=True)
+    else:
+        return jsonify({"error": "File not found"}), 404
 
 
 if __name__ == "__main__":
-    app.run(debug=True , port = 4000)
+    app.run(debug=True , port = 4000, host="0.0.0.0", threaded=True)

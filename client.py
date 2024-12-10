@@ -268,13 +268,6 @@ def fetch_data(date, defect_type, save_dir):
         # Define the base path
         base_path = "/home/kniti/projects/knit-i/knitting-core"
 
-        # Clean up and initialize save directory
-        if os.path.exists(save_dir):
-            print(f"Cleaning up existing directory: {save_dir}")
-            shutil.rmtree(save_dir)
-        os.makedirs(save_dir, exist_ok=True)
-        print(f"Initialized clean save directory: {save_dir}")
-
         # Map the defect type to its ID
         defect_type_id = defect_type_mapping.get(defect_type.lower())
         if not defect_type_id:
@@ -294,11 +287,13 @@ def fetch_data(date, defect_type, save_dir):
             raise Exception(f"No rolls found for the given date range: {start_date} - {end_date}")
         print(f"Retrieved {len(rolls)} rolls.")
 
-        # Create folders for images and bounding box images
+        # Create directories inside save_dir
         normal_images_dir = os.path.join(save_dir, "images")
         bbox_images_dir = os.path.join(save_dir, "bbox_images")
         os.makedirs(normal_images_dir, exist_ok=True)
         os.makedirs(bbox_images_dir, exist_ok=True)
+
+        print(f"Created directories:\n  Images: {normal_images_dir}\n  BBox Images: {bbox_images_dir}")
 
         csv_data = []
         for roll_id, roll_name in rolls:
@@ -329,7 +324,9 @@ def fetch_data(date, defect_type, save_dir):
                     # Copy original image to normal_images_dir
                     if filename:
                         print(f"Copying image: {filename}")
-                        copy_files_with_regex(base_path, normal_images_dir, file_path, filename)
+                        success = copy_files_with_regex(base_path, normal_images_dir, file_path, filename)
+                        if not success:
+                            print(f"Failed to copy image: {filename}")
 
         # Write data to CSV
         csv_file_path = os.path.join(save_dir, f"{date}_{defect_type}.csv")
@@ -343,31 +340,36 @@ def fetch_data(date, defect_type, save_dir):
         print(f"Defect data written to CSV: {csv_file_path}")
 
         # Process images and draw bounding boxes
-        process_images_with_defect_details(csv_file_path, bbox_images_dir)
+        process_images_with_defect_details(csv_file_path, save_dir)
 
-        # Create ZIP archive containing everything
+        # Check directories before zipping
+        print(f"Directory content before zipping:")
+        for root, dirs, files in os.walk(save_dir):
+            print(f"Root: {root}")
+            for d in dirs:
+                print(f"  Dir: {d}")
+            for f in files:
+                print(f"  File: {f}")
+
+        # Create a ZIP archive containing the entire save directory
         zip_dir = "/home/kniti/defect_analysis"
         os.makedirs(zip_dir, exist_ok=True)
         zip_filename = os.path.join(zip_dir, f"{date}_{defect_type}.zip")
-        with zipfile.ZipFile(zip_filename, 'w') as zipf:
-            # Add normal images
-            for root, dirs, files in os.walk(normal_images_dir):
+
+        # Zip the entire save directory
+        with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for root, dirs, files in os.walk(save_dir):
                 for file in files:
-                    zipf.write(os.path.join(root, file),
-                               os.path.relpath(os.path.join(root, file), save_dir))
-            # Add bbox images
-            for root, dirs, files in os.walk(bbox_images_dir):
-                for file in files:
-                    zipf.write(os.path.join(root, file),
-                               os.path.relpath(os.path.join(root, file), save_dir))
-            # Add CSV file
-            zipf.write(csv_file_path, os.path.relpath(csv_file_path, save_dir))
+                    file_path = os.path.join(root, file)
+                    arcname = os.path.relpath(file_path, save_dir)  # Maintain relative paths
+                    zipf.write(file_path, arcname)
 
         print(f"Defect analysis completed and saved to {zip_filename}")
 
     except Exception as e:
         print(f"Error in fetch_data: {e}")
         traceback.print_exc()
+
 
 
 # Run the fetch_data function if this script is executed directly
