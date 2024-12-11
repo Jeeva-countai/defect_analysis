@@ -25,6 +25,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
     
 RUN apt-get update && apt-get install -y openssh-client
+RUN apt-get update && apt-get install -y iputils-ping
 
 # Set up PostgreSQL service to run
 RUN service postgresql start
@@ -34,6 +35,8 @@ COPY requirements.txt /install/
 
 # Install Python dependencies from requirements.txt
 RUN pip3 install -r /install/requirements.txt
+
+RUN mkdir -p /app/files
 
 # Set the working directory inside the container
 WORKDIR /app

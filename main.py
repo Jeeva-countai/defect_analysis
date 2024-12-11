@@ -256,7 +256,7 @@ def submit():
 
 @app.route('/download/<path:filename>')
 def download_file(filename):
-    directory = './files/'  # Adjust to your base directory
+    directory = '/app/files/'  # Adjust to your base directory
     file_path = os.path.join(directory, filename)
 
     if os.path.exists(file_path):

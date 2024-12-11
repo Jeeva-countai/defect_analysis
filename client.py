@@ -82,6 +82,7 @@ class Execute:
                 f"AND roll_sts_id=2 ORDER BY roll_id ASC;"
             )
             data = self.execute_query(query)
+            print(data)
             return data
         except Exception as e:
             print(str(e))
