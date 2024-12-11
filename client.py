@@ -103,33 +103,32 @@ class Execute:
             print(str(e))
             traceback.print_exc()
 
-def zip_folder(folder_path, output_dir):
-    try:
-        # Get the folder name from the path
-        folder_name = os.path.basename(os.path.normpath(folder_path))
-        
-        # Create the full path for the output zip file
-        zip_path = os.path.join(output_dir, folder_name)
-        
-        # Zip the folder
-        shutil.make_archive(zip_path, 'zip', folder_path)
-        print(f"Folder zipped and saved as: {zip_path}.zip")
-    except Exception as e:
-        print(str(e))
-        traceback.print_exc()
-
 def recreate_folder(path):
     try:
-        # If the directory exists, delete it
         if os.path.exists(path):
             shutil.rmtree(path)
             print(f"Deleted folder: {path}")
-        
-        # Recreate the directory
-        os.makedirs(path)
-        print(f"Recreated folder: {path}")
+        os.makedirs(path, exist_ok=True)
+        print(f"Recreated folder with read/write permissions: {path}")
     except Exception as e:
-        print(str(e))
+        print(f"Error recreating folder: {e}")
+        traceback.print_exc()
+
+# Function to zip a folder and save it to a specified directory
+def zip_folder(folder_path, output_dir):
+    try:
+        folder_name = os.path.basename(os.path.normpath(folder_path))
+        zip_path = os.path.join(output_dir, folder_name)
+        
+        # Create zip file
+        shutil.make_archive(zip_path, 'zip', folder_path)
+
+        
+        print(f"Folder zipped and saved as: {zip_path}.zip with permissions set")
+    except Exception as e:
+        print(f"Error zipping folder: {e}")
+        traceback.print_exc()
+
 
 # Function to ensure proper file path by prepending base_path
 def get_full_image_path(base_path, file_path, filename):
@@ -265,43 +264,43 @@ def process_images_with_defect_details(csv_file_path, zip_dir):
 
 def fetch_data(date, defect_type, save_dir):
     try:
-        # Define the base path
+        # Base path for images
         base_path = "/home/kniti/projects/knit-i/knitting-core"
 
-        # Map the defect type to its ID
+        # Map defect type to its ID
         defect_type_id = defect_type_mapping.get(defect_type.lower())
         if not defect_type_id:
             raise ValueError(f"Invalid defect type: {defect_type}")
 
         # Initialize database connection
-        db = Execute()
+        db = Execute()  # Assuming `Execute` is already defined elsewhere
 
         # Calculate date range
         start_date = datetime.strptime(date, "%Y-%m-%d").replace(hour=0, minute=0, second=0)
         end_date = start_date + timedelta(days=1)
-        print(f"Fetching rolls between {start_date} and {end_date}...")
 
-        # Retrieve rolls for the given date range
+        # Fetch roll data
         rolls = db.get_roll_id(start_date, end_date)
         if not rolls:
             raise Exception(f"No rolls found for the given date range: {start_date} - {end_date}")
-        print(f"Retrieved {len(rolls)} rolls.")
 
-        # Create directories inside save_dir
-        normal_images_dir = os.path.join(save_dir, "images")
-        bbox_images_dir = os.path.join(save_dir, "bbox_images")
-        os.makedirs(normal_images_dir, exist_ok=True)
-        os.makedirs(bbox_images_dir, exist_ok=True)
+        # Prepare folder paths
+        full_save_dir = os.path.join("/home/kniti/defect_analysis")
+        recreate_folder(full_save_dir)
 
-        print(f"Created directories:\n  Images: {normal_images_dir}\n  BBox Images: {bbox_images_dir}")
+        # Subfolders for images and bounding box images
+        images_dir = os.path.join(full_save_dir, "images")
+        bbox_images_dir = os.path.join(full_save_dir, "bbox_images")
+        recreate_folder(images_dir)
+        recreate_folder(bbox_images_dir)
 
         csv_data = []
+
+        # Process rolls and defects
         for roll_id, roll_name in rolls:
-            print(f"Fetching defects for roll_id={roll_id}...")
             defects = db.get_needle_line_defects(roll_id, defect_type_id)
             if defects:
                 for defect in defects:
-                    # Accessing the fields by tuple indexing
                     defect_id = defect[1]
                     timestamp = defect[2]
                     file_path = defect[5]
@@ -309,7 +308,7 @@ def fetch_data(date, defect_type, save_dir):
                     coordinates_str = defect[8]
                     score = defect[9]
 
-                    # Add to CSV data
+                    # Add data to CSV
                     csv_data.append({
                         "roll_id": roll_id,
                         "roll_name": roll_name,
@@ -321,37 +320,21 @@ def fetch_data(date, defect_type, save_dir):
                         "score": score
                     })
 
-                    # Copy original image to normal_images_dir
+                    # Copy images
                     if filename:
-                        print(f"Copying image: {filename}")
-                        success = copy_files_with_regex(base_path, normal_images_dir, file_path, filename)
-                        if not success:
-                            print(f"Failed to copy image: {filename}")
+                        copy_files_with_regex(base_path, images_dir, file_path, filename)
 
-        # Write data to CSV
-        csv_file_path = os.path.join(save_dir, f"{date}_{defect_type}.csv")
-        headers = ['roll_id', 'roll_name', 'defect_id', 'timestamp', 
-                   'file_path', 'filename', 'coordinates', 'score']
+        # Save CSV
+        csv_file_path = os.path.join(full_save_dir, f"{date}_{defect_type}.csv")
+        headers = ['roll_id', 'roll_name', 'defect_id', 'timestamp', 'file_path', 'filename', 'coordinates', 'score']
         with open(csv_file_path, mode='w', newline='') as file:
             writer = csv.DictWriter(file, fieldnames=headers)
             writer.writeheader()
             writer.writerows(csv_data)
 
-        print(f"Defect data written to CSV: {csv_file_path}")
+        # Process images for bounding boxes
+        process_images_with_defect_details(csv_file_path, full_save_dir)
 
-        # Process images and draw bounding boxes
-        process_images_with_defect_details(csv_file_path, save_dir)
-
-        # Check directories before zipping
-        print(f"Directory content before zipping:")
-        for root, dirs, files in os.walk(save_dir):
-            print(f"Root: {root}")
-            for d in dirs:
-                print(f"  Dir: {d}")
-            for f in files:
-                print(f"  File: {f}")
-
-        # Create a ZIP archive containing the entire save directory
         zip_dir = "/home/kniti/defect_analysis"
         os.makedirs(zip_dir, exist_ok=True)
         zip_filename = os.path.join(zip_dir, f"{date}_{defect_type}.zip")
@@ -365,6 +348,9 @@ def fetch_data(date, defect_type, save_dir):
                     zipf.write(file_path, arcname)
 
         print(f"Defect analysis completed and saved to {zip_filename}")
+
+
+        print(f"Processing completed. Data saved in: {full_save_dir}")
 
     except Exception as e:
         print(f"Error in fetch_data: {e}")

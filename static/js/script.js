@@ -1,9 +1,18 @@
 document.addEventListener('DOMContentLoaded', () => {
+    // Fetch the list of mills and initialize the page on load
     fetchMills();
+    
+    // Event listener for mill selection change
     document.getElementById('millDropdown').addEventListener('change', fetchMachines);
+    
+    // Event listener for form submission
     document.getElementById('submitButton').addEventListener('click', handleSubmit);
+
+    // Ensure spinner is hidden on page load/reload
+    hideSpinner();
 });
 
+// Fetch list of mills from server and populate dropdown
 async function fetchMills() {
     const responseDiv = document.getElementById('response');
     responseDiv.innerHTML = ''; // Clear previous response
@@ -30,6 +39,7 @@ async function fetchMills() {
     }
 }
 
+// Fetch list of machines based on selected mill and populate dropdown
 async function fetchMachines() {
     const millDropdown = document.getElementById('millDropdown');
     const machineDropdown = document.getElementById('machineDropdown');
@@ -58,14 +68,15 @@ async function fetchMachines() {
     }
 }
 
+// Handle form submission, validate inputs, and submit data
 async function handleSubmit() {
     const millDropdown = document.getElementById('millDropdown');
     const machineDropdown = document.getElementById('machineDropdown');
     const date = document.getElementById('date').value;
-    const saveDir = document.getElementById('saveDir').value;
     const defectType = document.getElementById('defectType').value;
 
-    if (!millDropdown.value || !machineDropdown.value || !date || !saveDir || !defectType) {
+    // Validate required fields
+    if (!millDropdown.value || !machineDropdown.value || !date || !defectType) {
         alert('Please fill all fields!');
         return;
     }
@@ -78,10 +89,12 @@ async function handleSubmit() {
         defectType,
         millId: millDropdown.value,
         machineId: machineDropdown.value,
-        saveDir,
         millName,
         machineName,
     };
+
+    // Show spinner when the submit button is clicked
+    showSpinner();
 
     try {
         const response = await fetch('/submit', {
@@ -90,14 +103,22 @@ async function handleSubmit() {
             body: JSON.stringify(requestData),
         });
 
-        const result = await response.json();
-        displayResponse(result);
+        if (response.status === 200) {
+            const result = await response.json();
+            displayResponse(result);
+        } else {
+            displayResponse({ message: 'Error occurred during submission.' });
+        }
     } catch (error) {
         console.error('Error submitting request:', error);
         displayResponse({ message: `Error: ${error.message}` });
+    } finally {
+        // Hide spinner after receiving a response
+        hideSpinner();
     }
 }
 
+// Display response message and optional download button
 function displayResponse(result) {
     const responseDiv = document.getElementById('response');
     responseDiv.innerHTML = ''; // Clear previous response
@@ -123,3 +144,14 @@ function displayResponse(result) {
     }
 }
 
+// Show loading spinner
+function showSpinner() {
+    const loadingModal = document.getElementById('loadingModal');
+    loadingModal.style.display = 'block';
+}
+
+// Hide loading spinner
+function hideSpinner() {
+    const loadingModal = document.getElementById('loadingModal');
+    loadingModal.style.display = 'none';
+}

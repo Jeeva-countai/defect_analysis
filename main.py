@@ -1,16 +1,11 @@
 import os
-import csv
-import shutil
 import subprocess
 import traceback
-import paramiko  # Import paramiko for better SSH/SCP handling
 from flask import Flask, request, jsonify, render_template
 from db import DB
 from datetime import datetime, timedelta
-import pytz
 import time
-import platform
-from flask import send_file, send_from_directory
+from flask import send_from_directory
 
 
 app = Flask(__name__)
@@ -93,7 +88,6 @@ class SSHManager:
         except Exception as e:
             print(f"Error while pinging {ip_address}: {e}")
             return False
-import os
 
 def rename_zip_file(original_file_path, mill_name, machine_name, date, defect_type, save_dir):
     """
@@ -116,16 +110,22 @@ def rename_zip_file(original_file_path, mill_name, machine_name, date, defect_ty
         print(f"Error renaming file: {e}")
         return str(e), False
 
-
 def fetch_data(date, defect_type_id, mill_id, machine_id, save_dir):
     """Fetch mill and machine details, run remote script, and fetch result."""
     try:
+        # Fetch mill and machine details from the database
         mill_name = db.get_mills()
         machine_name = db.get_machines_by_mill(mill_id)
         machine_ip = db.get_machine_ip(mill_id, machine_id)
         
         if not all([mill_name, machine_name, machine_ip]):
             raise Exception(f"Missing details for mill_id={mill_id}, machine_id={machine_id}")
+        
+        # Remove the offending host key from known_hosts for the machine_ip
+        # print(f"Removing old host key for IP: {machine_ip} from known_hosts...")
+        # known_hosts_path = "/root/.ssh/known_hosts"
+        # ssh_keygen_command = f"ssh-keygen -f {known_hosts_path} -R {machine_ip}"
+        # subprocess.run(ssh_keygen_command, shell=True, check=True)
 
         # Establish SSH connection
         ssh = SSHManager(username="kniti", password="Charlemagne@1")
@@ -133,7 +133,25 @@ def fetch_data(date, defect_type_id, mill_id, machine_id, save_dir):
         if not success:
             raise Exception(f"SSH connection to {machine_ip} failed.")
         
-        #  Check if client.py exists and remove it if it does
+        # Install Pillow on the client machine using pip3
+        print(f"Installing Pillow on {machine_ip}...")
+        install_pillow_command = "pip3 install Pillow"
+        success, output = ssh.run_command(machine_ip, install_pillow_command)
+        if not success:
+            raise Exception(f"Failed to install Pillow: {output}")
+
+        # Ensure the directory /home/kniti/defct_analysis exists
+        print(f"Ensuring /home/kniti/defect_analysis exists on {machine_ip}...")
+        create_dir_command = "mkdir -p /home/kniti/defect_analysis"
+        success, output = ssh.run_command(machine_ip, create_dir_command)
+        if not success:
+            raise Exception(f"Failed to create /home/kniti/defect_analysis directory: {output}")
+
+        # Change permissions on /home/kniti/defct_analysis to allow write access
+        print(f"Changing permissions on /home/kniti/defect_analysis to allow write access...")
+    
+
+        # Check if client.py exists and remove it if necessary
         print(f"Checking if client.py exists on {machine_ip}...")
         check_file_command = "test -f /home/kniti/client.py && echo 'File exists' || echo 'File does not exist'"
         success, output = ssh.run_command(machine_ip, check_file_command)
@@ -147,13 +165,12 @@ def fetch_data(date, defect_type_id, mill_id, machine_id, save_dir):
         # Copy the updated client.py to the remote machine
         print(f"Copying client.py to {machine_ip}...")
         scp_command = [
-            "scp", "/home/jeeva/defect_analysis/project/app/client.py",
+            "scp", "-o", "StrictHostKeyChecking=no", "./client.py",
             f"kniti@{machine_ip}:/home/kniti/client.py"
         ]
         result = subprocess.run(scp_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if result.returncode != 0:
             raise Exception(f"Failed to copy client.py: {result.stderr.decode()}")
-
 
         # Run the remote script to process data
         remote_script_command = f"python3 /home/kniti/client.py {date} {defect_type_id} {save_dir}"
@@ -161,24 +178,30 @@ def fetch_data(date, defect_type_id, mill_id, machine_id, save_dir):
         if not success:
             raise Exception(f"Failed to execute client.py: {output}")
 
-        # Fetch the result file
-        zip_filename = f"{date}_{defect_type_id}.zip"
-        remote_file_path = f"/home/kniti/defect_analysis/{zip_filename}"
-        local_file_path = os.path.join(save_dir, zip_filename)
+         # Check if the ZIP file exists on the remote machine
+        remote_zip_path = f"/home/kniti/defect_analysis/{date}_{defect_type_id}.zip"
+        print(f"Checking if {remote_zip_path} exists on the remote machine...")
+        check_file_command = f"test -f {remote_zip_path} && echo 'File exists' || echo 'File does not exist'"
+        success, output = ssh.run_command(machine_ip, check_file_command)
+        if success and "File does not exist" in output:
+            raise Exception(f"ZIP file {remote_zip_path} does not exist on the remote machine.")
 
-        print(f"Fetching file from {remote_file_path} to {local_file_path}...")
+        # Now fetch the ZIP file
+        print(f"Fetching ZIP file from {remote_zip_path} to {save_dir}...")
+        # scp_fetch_command = [
+        #     "scp", "-o", "StrictHostKeyChecking=no", f"kniti@{machine_ip}:{remote_zip_path}",
+        #     os.path.join(save_dir, f"{date}_{defect_type_id}.zip")
+        # ]
+        command = f"scp kniti@{machine_ip}:/home/kniti/defect_analysis/{date}_{defect_type_id}.zip {save_dir}"
+        os.system(command)
+        # fetch_result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         
-        # Use subprocess.run with shell=False for better safety and error handling
-        scp_fetch_command = [
-            "scp", f"kniti@{machine_ip}:{remote_file_path}", local_file_path
-        ]
-        fetch_result = subprocess.run(scp_fetch_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        # if fetch_result.returncode != 0:
+            # raise Exception(f"Failed to fetch ZIP file: {fetch_result.stderr.decode()}")
         
-        if fetch_result.returncode != 0:
-            raise Exception(f"Failed to fetch ZIP file: {fetch_result.stderr.decode()}")
-        
-        print(f"ZIP file fetched successfully: {local_file_path}")
-        return local_file_path, True
+        print(f"ZIP file fetched successfully: {os.path.join(save_dir, f'{date}_{defect_type_id}.zip')}")
+        return os.path.join(save_dir, f"{date}_{defect_type_id}.zip"), True
+
 
     except Exception as e:
         print(f"Error in fetch_data: {e}")
@@ -221,10 +244,10 @@ def submit():
     defect_type = data.get("defectType")
     mill_id = data.get("millId")
     machine_id = data.get("machineId")
-    save_dir = data.get("saveDir")
+    save_dir = data.get("saveDir", "./files/")
 
-    if not all([date, defect_type, mill_id, machine_id, save_dir]):
-        return jsonify({"message": "All fields are required!"}), 400
+    if not all([date, defect_type, mill_id, machine_id]):
+        return jsonify({"message": "All fields except 'saveDir' are required!"}), 400
 
     result_file_path, success = fetch_data(date, defect_type, mill_id, machine_id, save_dir)
     if success:
@@ -233,7 +256,7 @@ def submit():
 
 @app.route('/download/<path:filename>')
 def download_file(filename):
-    directory = '/home/jeeva/defect'  # Adjust to your base directory
+    directory = './files/'  # Adjust to your base directory
     file_path = os.path.join(directory, filename)
 
     if os.path.exists(file_path):
@@ -243,4 +266,4 @@ def download_file(filename):
 
 
 if __name__ == "__main__":
-    app.run(debug=True , port = 4000, host="0.0.0.0", threaded=True)
+    app.run(debug=True , port = 9996, host="0.0.0.0", threaded=True)
