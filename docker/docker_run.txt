@@ -1,0 +1,5 @@
+sudo docker stop defect-container ##-- stop the container and
+sudo docker rm defect-container ##-- remove the container
+sudo docker build -t defect-app .  ##-- build the container
+sudo docker run -it --name defect-container --network=host   -e "DB_DBNAME=central_database" -e "DB_PORT=5432"   -e "DB_USER=postgres" -e "DB_PASS=55555"   -e "DB_HOST=127.0.0.1" --privileged   --log-opt max-size=200m --log-opt max-file=1   --restart always   defect-app ##-- run the container
+

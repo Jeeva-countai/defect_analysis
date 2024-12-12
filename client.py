@@ -10,6 +10,8 @@ import glob
 from PIL import Image, ImageDraw, ImageFont
 import ast
 import zipfile
+import re
+
 
 
 BASE_DIR = '/home/kniti/projects/knit-i/knitting-core'
@@ -116,19 +118,20 @@ def recreate_folder(path):
         traceback.print_exc()
 
 # Function to zip a folder and save it to a specified directory
-def zip_folder(folder_path, output_dir):
+def zip_folder(folder_path, zip_filename):
     try:
-        folder_name = os.path.basename(os.path.normpath(folder_path))
-        zip_path = os.path.join(output_dir, folder_name)
+        # Create a ZipFile object with the specified zip_filename
+        with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            # Walk through the directory and add all files to the zip file
+            for root, dirs, files in os.walk(folder_path):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    # Add file to zip, arcname to maintain folder structure inside the zip
+                    zipf.write(file_path, os.path.relpath(file_path, folder_path))
         
-        # Create zip file
-        shutil.make_archive(zip_path, 'zip', folder_path)
-
-        
-        print(f"Folder zipped and saved as: {zip_path}.zip with permissions set")
+        print(f"Folder zipped and saved as: {zip_filename} with permissions set")
     except Exception as e:
         print(f"Error zipping folder: {e}")
-        traceback.print_exc()
 
 
 # Function to ensure proper file path by prepending base_path
@@ -191,78 +194,127 @@ def copy_files_with_regex(base_path, dest_dir, file_path, filename):
         traceback.print_exc()
         return False
 
-def draw_bbox_on_image(full_image_path, coordinates, score, output_path):
-    print(f"Attempting to process image: {full_image_path}")
-
-    # Check if the image file exists
-    if not os.path.exists(full_image_path):
-        print(f"Image not found: {full_image_path}")
-        return
+def find_matching_file(base_path, csv_filepath, csv_filename):
+    """
+    Find the best matching file in the directory for the given CSV filename
+    by ignoring suffixes like _0, _1, etc.
+    """
+    # Ensure the base path is included in the image lookup
+    full_directory = os.path.join(base_path, csv_filepath)  # Use the correct base path
+    print(f"Searching in directory: {full_directory}")
     
+    # Extract the base name without extension from the CSV filename
+    base_name = os.path.splitext(csv_filename)[0]
+
+    # Prepare the regex pattern to match filenames with suffixes like _0, _1, etc.
+    pattern = re.escape(base_name) + r'_\d+\.jpg$'  # Match suffix pattern "_<number>.jpg"
+
+    # Search through the files in the directory
+    for file in os.listdir(full_directory):
+        if re.match(pattern, file):
+            return os.path.join(full_directory, file)
+
+    print(f"No matching file found for {csv_filename} in {full_directory}")
+    return None
+
+def draw_bbox_on_image(base_path, csv_filepath, filename, coordinates, score, output_path):
+    """
+    Draw bounding box on the image and save it to the output path.
+    Supports processing multiple files with matching filenames using * pattern.
+    """
+    print(f"Attempting to process image: {filename}")
+
+    # Ensure the base path is always included, regardless of whether csv_filepath is absolute or relative
+    actual_file_path = os.path.join(base_path, csv_filepath.lstrip(os.sep), filename)  # lstrip to avoid double slashes
+
+    # Extract the directory path
+    directory_path = os.path.dirname(actual_file_path)
+    if not os.path.exists(directory_path):
+        print(f"Directory does not exist: {directory_path}. Please check base_path and file_path.")
+        return
+
+    # Create a search pattern for matching files
+    file_root, file_ext = os.path.splitext(filename)
+    search_pattern = os.path.join(directory_path, f"{file_root}*{file_ext}")
+    print(f"Search pattern: {search_pattern}")
+
+    # Find matching files
+    matching_files = glob.glob(search_pattern)
+    print(f"Matching files: {matching_files}")
+
+    if not matching_files:
+        print(f"No matching files found for {filename} in {directory_path}")
+        return
+
     try:
-        with Image.open(full_image_path) as img:
-            draw = ImageDraw.Draw(img)
-            x1, y1, x2, y2 = coordinates
-            draw.rectangle((x1, y1, x2, y2), outline="red", width=3)
-            
-            font = ImageFont.load_default()
-            score_text = f"Score: {score:.2f}"
-            text_width, text_height = draw.textsize(score_text, font=font)
-            text_position = (x1 + (x2 - x1 - text_width) / 2, y2 + 5)
-            draw.text(text_position, score_text, fill="red", font=font)
-            
-            img.save(output_path)
-            print(f"Image with bounding box saved to {output_path}")
+        # Process each matching file
+        for matched_file in matching_files:
+            print(f"Processing image: {matched_file}")
+
+            # Open the image
+            with Image.open(matched_file) as img:
+                draw = ImageDraw.Draw(img)
+                x1, y1, x2, y2 = coordinates
+                draw.rectangle((x1, y1, x2, y2), outline="red", width=3)
+
+                font = ImageFont.load_default()
+                score_text = f"Score: {score:.2f}"
+                text_width, text_height = draw.textsize(score_text, font=font)
+                text_position = (x1 + (x2 - x1 - text_width) / 2, y2 + 5)
+                draw.text(text_position, score_text, fill="red", font=font)
+
+                # Ensure the directory exists for saving images
+                os.makedirs(output_path, exist_ok=True)
+
+                # Save the image with the bounding box to the output path
+                output_file = os.path.join(output_path, os.path.basename(matched_file))
+                
+                # Avoid duplicating the directory structure
+                if output_file.startswith(os.path.join(output_path, 'bbox_images')):
+                    output_file = output_file.replace(os.path.join(output_path, 'bbox_images'), output_path, 1)
+
+                img.save(output_file)
+                print(f"Image with bounding box saved to {output_file}")
+
     except Exception as e:
         print(f"Error in draw_bbox_on_image: {e}")
+        traceback.print_exc()
 
-def process_images_with_defect_details(csv_file_path, zip_dir):
-    # Create the bbox_images directory inside the ZIP folder directory
+def process_images_with_defect_details(csv_file_path, base_path, zip_dir):
+    """
+    Process images by reading the CSV, matching images, drawing bounding boxes,
+    and saving the results.
+    """
     bbox_images_dir = os.path.join(zip_dir, "bbox_images")
     os.makedirs(bbox_images_dir, exist_ok=True)
-    
+
     print(f"Processing CSV: {csv_file_path}")
     with open(csv_file_path, "r") as csvfile:
         reader = csv.DictReader(csvfile)
         for row in reader:
             try:
-                # Read values from the CSV row
                 filename = row.get('filename')
-                file_path = row.get('file_path')
                 coordinates_str = row.get('coordinates')
                 score = row.get('score')
+                file_path = row.get('file_path')
 
-                # Debugging information
-                print(f"CSV Row Data: filename={filename}, file_path={file_path}, coordinates={coordinates_str}, score={score}")
-
-                if not all([filename, file_path, coordinates_str, score]):
+                if not all([filename, coordinates_str, score]):
                     raise ValueError("Missing required fields in CSV row.")
-                
-                # Convert score to float
+
                 score = float(score)
-                
-                # Safely parse coordinates
+
                 coordinates = ast.literal_eval(coordinates_str)
-                if isinstance(coordinates, list) and len(coordinates) == 2 and \
-                   all(isinstance(coord, list) and len(coord) == 2 for coord in coordinates):
-                    coordinates = [coordinates[0][0], coordinates[0][1], coordinates[1][0], coordinates[1][1]]
-                else:
+                if not isinstance(coordinates, list) or len(coordinates) != 4 or \
+                        not all(isinstance(coord, (int, float)) for coord in coordinates):
                     raise ValueError(f"Invalid coordinates format: {coordinates_str}")
-                
-                # Construct full image path
-                full_image_path = os.path.join(BASE_DIR, file_path.strip('/'), filename)
-                
-                # Construct output path for the image with bounding box
+
                 output_path = os.path.join(bbox_images_dir, filename)
-                
-                # Draw bounding box
-                draw_bbox_on_image(full_image_path, coordinates, score, output_path)
-                
+                draw_bbox_on_image(base_path, file_path, filename, coordinates, score, output_path)
+
             except Exception as e:
                 print(f"Error processing row: {row.get('filename', 'Unknown')} -> {e}")
-    
-    print(f"Processing complete. Images saved in {bbox_images_dir}.")
 
+    print(f"Processing complete. Images saved in {bbox_images_dir}.")
 def fetch_data(date, defect_type, save_dir):
     try:
         # Base path for images
@@ -293,7 +345,7 @@ def fetch_data(date, defect_type, save_dir):
         images_dir = os.path.join(full_save_dir, "images")
         bbox_images_dir = os.path.join(full_save_dir, "bbox_images")
         recreate_folder(images_dir)
-        recreate_folder(bbox_images_dir)
+        # recreate_folder(bbox_images_dir)
 
         csv_data = []
 
@@ -334,29 +386,22 @@ def fetch_data(date, defect_type, save_dir):
             writer.writerows(csv_data)
 
         # Process images for bounding boxes
-        process_images_with_defect_details(csv_file_path, full_save_dir)
+        process_images_with_defect_details(csv_file_path, base_path, bbox_images_dir)
 
+        # Create a zip file
         zip_dir = "/home/kniti/defect_analysis"
         os.makedirs(zip_dir, exist_ok=True)
         zip_filename = os.path.join(zip_dir, f"{date}_{defect_type}.zip")
 
-        # Zip the entire save directory
-        with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for root, dirs, files in os.walk(save_dir):
-                for file in files:
-                    file_path = os.path.join(root, file)
-                    arcname = os.path.relpath(file_path, save_dir)  # Maintain relative paths
-                    zipf.write(file_path, arcname)
+        # Call zip_folder to zip the folder with the correct zip_filename
+        zip_folder(full_save_dir, zip_filename)
 
         print(f"Defect analysis completed and saved to {zip_filename}")
-
-
         print(f"Processing completed. Data saved in: {full_save_dir}")
 
     except Exception as e:
         print(f"Error in fetch_data: {e}")
         traceback.print_exc()
-
 
 
 # Run the fetch_data function if this script is executed directly

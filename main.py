@@ -121,12 +121,6 @@ def fetch_data(date, defect_type_id, mill_id, machine_id, save_dir):
         if not all([mill_name, machine_name, machine_ip]):
             raise Exception(f"Missing details for mill_id={mill_id}, machine_id={machine_id}")
         
-        # Remove the offending host key from known_hosts for the machine_ip
-        # print(f"Removing old host key for IP: {machine_ip} from known_hosts...")
-        # known_hosts_path = "/root/.ssh/known_hosts"
-        # ssh_keygen_command = f"ssh-keygen -f {known_hosts_path} -R {machine_ip}"
-        # subprocess.run(ssh_keygen_command, shell=True, check=True)
-
         # Establish SSH connection
         ssh = SSHManager(username="kniti", password="Charlemagne@1")
         success, _ = ssh.run_command(machine_ip, "hostname")
@@ -146,10 +140,6 @@ def fetch_data(date, defect_type_id, mill_id, machine_id, save_dir):
         success, output = ssh.run_command(machine_ip, create_dir_command)
         if not success:
             raise Exception(f"Failed to create /home/kniti/defect_analysis directory: {output}")
-
-        # Change permissions on /home/kniti/defct_analysis to allow write access
-        print(f"Changing permissions on /home/kniti/defect_analysis to allow write access...")
-    
 
         # Check if client.py exists and remove it if necessary
         print(f"Checking if client.py exists on {machine_ip}...")
@@ -188,20 +178,21 @@ def fetch_data(date, defect_type_id, mill_id, machine_id, save_dir):
 
         # Now fetch the ZIP file
         print(f"Fetching ZIP file from {remote_zip_path} to {save_dir}...")
-        # scp_fetch_command = [
-        #     "scp", "-o", "StrictHostKeyChecking=no", f"kniti@{machine_ip}:{remote_zip_path}",
-        #     os.path.join(save_dir, f"{date}_{defect_type_id}.zip")
-        # ]
+
         command = f"scp kniti@{machine_ip}:/home/kniti/defect_analysis/{date}_{defect_type_id}.zip {save_dir}"
         os.system(command)
-        # fetch_result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        
-        # if fetch_result.returncode != 0:
-            # raise Exception(f"Failed to fetch ZIP file: {fetch_result.stderr.decode()}")
-        
+       
         print(f"ZIP file fetched successfully: {os.path.join(save_dir, f'{date}_{defect_type_id}.zip')}")
-        return os.path.join(save_dir, f"{date}_{defect_type_id}.zip"), True
+        # return os.path.join(save_dir, f"{date}_{defect_type_id}.zip"), True
 
+        # # Remove /home/kniti/defect_analysis directory after fetching the ZIP file
+        print(f"Removing /home/kniti/defect_analysis directory on {machine_ip}...")
+        remove_dir_command = "rm -rf /home/kniti/defect_analysis"
+        success, output = ssh.run_command(machine_ip, remove_dir_command)
+        if not success:
+            raise Exception(f"Failed to remove /home/kniti/defect_analysis directory: {output}")
+
+        return os.path.join(save_dir, f"{date}_{defect_type_id}.zip"), True
 
     except Exception as e:
         print(f"Error in fetch_data: {e}")
